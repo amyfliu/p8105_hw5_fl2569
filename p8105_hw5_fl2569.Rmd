@@ -5,7 +5,7 @@ date: "11/16/2021"
 output: github_document
 ---
 
-```{r eval=FALSE}
+```{r, message = FALSE}
 #tidyverse pacakge (dplyr, ggplot2, etc)
 library(tidyverse)
 
@@ -27,3 +27,148 @@ options(
 scale_colour_discrete = scale_colour_viridis_d
 scale_fill_discrete = scale_fill_viridis_d
 ```
+
+## Problem 1  
+
+First, clean the data. 
+```{r}
+homicide_df = 
+  read_csv("./data/homicide-data.csv", na = c("", "Unknown")) %>% 
+  mutate(
+    city_state = str_c(city, state),
+    resolution = case_when(
+      disposition == "Closed without arrest" ~ "unsolved",
+      disposition == "Open/No arrest" ~ "unsolved",
+      disposition == "Closed by arrest" ~ "solved"
+    )) %>% 
+  relocate(city_state) %>% 
+  filter(city_state != "TulsaAL")
+
+homicide_df
+```
+
+Focus on Baltimore, MD...
+unsolved homicides / total # of homicides
+```{r}
+prop.test(x = 5, n = 10)
+
+baltimore_df = 
+  homicide_df %>% 
+  filter(city_state == "BaltimoreMD") #2827 total homicides
+
+baltimore_summary = 
+baltimore_df %>% 
+  summarize(
+    unsolved = sum(resolution == "unsolved"),#1825 unsolved homicides
+    n = n()
+)
+
+baltimore_test = 
+  prop.test(
+    x = baltimore_summary %>% pull(unsolved),
+    n = baltimore_summary %>% pull(n)
+  ) #64% of the homicides in Baltimore is unsolved... 
+
+baltimore_test %>% 
+  broom::tidy()
+```
+
+Let's try iterate across all the cities! :) 
+
+First, write a function. 
+```{r}
+prop_test_function = function(city_df){
+  
+  city_summary = 
+    city_df %>% 
+    summarize(
+      unsolved = sum(resolution == "unsolved"),#1825 unsolved homicides
+      n = n()
+    )
+
+  city_test = 
+    prop.test(
+      x = city_summary %>% pull(unsolved),
+      n = city_summary %>% pull(n)
+    ) #64% of the homicides in Baltimore is unsolved... 
+
+  return(city_test) #city_test is a list of the prop.test results
+}
+```
+
+Let's test the function we just wrote. 
+```{r}
+prop_test_function(baltimore_df)
+
+prop_test_function(
+  homicide_df %>% 
+    filter(city_state == "AlbuquerqueNM")
+)
+
+#OR
+homicide_df %>% 
+  filter(city_state == "AlbuquerqueNM") %>% 
+  prop_test_function()
+```
+
+Now, let's iterate across all cities. 
+```{r}
+nested_df = 
+  homicide_df %>% 
+  nest(data = uid:resolution) %>%  #create nested listed
+  mutate(
+    test_results = map(data, prop_test_function),
+    tidy_results = map(test_results, broom::tidy)
+  )
+
+#Map across the data column and apply the prop_test_function()
+  
+#to test... 
+nested_df %>% 
+  filter(city_state == "BaltimoreMD") %>% 
+  pull(tidy_results)
+
+```
+
+```{r}
+results_df = 
+  homicide_df %>% 
+  nest(data = uid:resolution) %>%  #create nested listed
+  mutate(
+    test_results = map(data, prop_test_function),
+    tidy_results = map(test_results, broom::tidy)
+  ) %>% 
+  select(city_state, tidy_results) %>% 
+  unnest(tidy_results) %>% 
+  select(city_state, estimate, starts_with("conf")) %>% 
+  arrange(estimate) #order from least unsolved homicide to highest unsolved homicide
+```
+
+Try make a plot showing estimates and confidence intervals.
+```{r}
+results_df %>% 
+  mutate(city_state = fct_reorder(city_state, estimate)) %>% 
+  ggplot(aes(x = city_state, y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+
+Another way of solving the problem using `map2`:  
+```{r}
+homicide_df %>% 
+  group_by(city_state) %>% 
+  summarize(
+    unsolved = sum(resolution == "unsolved"),
+    n = n()
+  ) %>% 
+  mutate(
+    test_results = map2(unsolved, n, prop.test),
+    tidy_results = map(test_results, broom::tidy)
+  ) %>% 
+  select(city_state, tidy_results) %>% 
+  unnest(tidy_results) %>% 
+  select(city_state, estimate, starts_with("conf"))
+```
+
+
